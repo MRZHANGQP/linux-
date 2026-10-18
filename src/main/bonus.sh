@@ -22,7 +22,7 @@ if [ "$action" = "start" ]; then
         # 兜底：找不到就死循环输出
         exec_cmd="while true; do echo 'Collecting logs...'; sleep 1; done"
     else
-        # 不管什么脚本统统交给解释器运行.绝对不报权限错误
+        # 不管什么脚本统统交给解释器运行绝对不报权限错误
         if [[ "$collector_script" == *.py ]]; then
             exec_cmd="python3 '$collector_script'"
         else

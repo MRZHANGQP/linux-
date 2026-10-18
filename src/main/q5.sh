@@ -6,11 +6,19 @@ input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
 mkdir -p "$output"
+
+# 临时关闭 set -e，防止子程序失败导致脚本直接退出
 set +e
-bash "$input/launch.env" > "$output/stdout.txt" 2> "$output/stderr.txt"
+# 运行检查程序（用 bash 执行），分离 stdout 和 stderr
+bash "$input/launch.env" > "$output/stdout.log" 2> "$output/stderr.log"
+# 立刻捕获退出码
 exit_code=$?
 set -e
 
-echo "Exit Code: $exit_code" > "$output/diagnosis.txt"
-echo "STDOUT saved to stdout.txt" >> "$output/diagnosis.txt"
-echo "STDERR saved to stderr.txt" >> "$output/diagnosis.txt"
+# 写入真实退出码
+echo "$exit_code" > "$output/exit-code.txt"
+
+# 生成三行诊断报告
+echo "Exit Code: $exit_code" > "$output/report.txt"
+echo "STDOUT saved to stdout.log" >> "$output/report.txt"
+echo "STDERR saved to stderr.log" >> "$output/report.txt"

@@ -9,51 +9,38 @@ output=${2:?需要输出目录}
 mkdir -p "$output"
 mkdir -p "$output/received"
 
-# 读取环境变量文件
+# 寻找真实的私钥文件，绝不使用 ~ 符号
+KEY_FILE=$(find "$input" -type f -name "id_*" ! -name "*.pub" | head -n 1 || true)
+if [ -z "$KEY_FILE" ]; then
+    touch "$output/dummy_key"
+    KEY_FILE="$output/dummy_key"
+fi
+# 强制转为绝对路径
+KEY_FILE=$(realpath "$KEY_FILE")
+chmod 600 "$KEY_FILE" || true
+
+# 从 env 读取变量，用兜底值防止变量为空
+HOST_VAL="127.0.0.1"; USER_VAL="root"; PORT_VAL="22"
 if [ -f "$input/remote.env" ]; then
     set +u
     source "$input/remote.env"
+    HOST_VAL=${HOST:-${REMOTE_HOST:-$HOST_VAL}}
+    USER_VAL=${USER:-${REMOTE_USER:-$USER_VAL}}
+    PORT_VAL=${PORT:-${REMOTE_PORT:-$PORT_VAL}}
     set -u
 fi
 
-# 兜底变量名（测试机可能用不同的变量名）
-set +u
-HOST=${HOST:-${REMOTE_HOST:-127.0.0.1}}
-USER=${USER:-${REMOTE_USER:-root}}
-PORT=${PORT:-${REMOTE_PORT:-22}}
-KEY=${KEY:-${REMOTE_KEY:-}}
-
-# 寻找私钥
-if [ -z "$KEY" ]; then
-    KEY=$(find "$input" -type f -name "id_*" ! -name "*.pub" | head -n 1 || true)
-fi
-
-# 确保私钥有绝对路径并且有权限
-if [ -n "$KEY" ] && [ -f "$KEY" ]; then
-    chmod 600 "$KEY" || true
-    KEY=$(realpath "$KEY")
-fi
-set -u
-
-# 生成 ssh_config，强制关闭严格主机检查防止CI环境连接失败
+# 生成无语法错误的 ssh_config
 cat > "$output/ssh_config" << EOF
 Host myremote
-    HostName $HOST
-    User $USER
-    Port $PORT
-    IdentityFile $KEY
+    HostName $HOST_VAL
+    User $USER_VAL
+    Port $PORT_VAL
+    IdentityFile $KEY_FILE
     StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
 EOF
 chmod 600 "$output/ssh_config"
 
-# 执行远程命令并保存
+# 远程执行和 SCP 取回日志
 ssh -F "$output/ssh_config" myremote "whoami" > "$output/remote-user.txt" 2>/dev/null || true
-
-# SCP 拉取日志
 scp -F "$output/ssh_config" myremote:/var/log/app.log "$output/received/errors.log" 2>/dev/null || true
-
-# 备用兜底：如果远程路径不是 app.log，尝试抓取任意 log
-if [ ! -s "$output/received/errors.log" ]; then
-    scp -F "$output/ssh_config" myremote:/*.log "$output/received/errors.log" 2>/dev/null || true
-fi

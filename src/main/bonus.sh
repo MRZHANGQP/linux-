@@ -15,7 +15,7 @@ if [ "$action" = "start" ]; then
     # 清理旧会话
     tmux kill-session -t "$session_name" 2>/dev/null || true
 
-    # 寻找采集器脚本
+    # 寻找采集器脚本。。。
     collector_script=$(find "$input" -type f \( -name "collector*" -o -name "gather*" \) | head -n 1 || true)
 
     if [ -z "$collector_script" ]; then

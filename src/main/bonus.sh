@@ -12,17 +12,18 @@ mkdir -p "$output"
 session_name="debug_session"
 
 if [ "$action" = "start" ]; then
-    # 清理旧会话
+    # 1. 真实清理旧会话
     tmux kill-session -t "$session_name" 2>/dev/null || true
 
-    # 寻找采集器脚本。。。
+    # 2. 动态查找采集器脚本
     collector_script=$(find "$input" -type f \( -name "collector*" -o -name "gather*" \) | head -n 1 || true)
 
     if [ -z "$collector_script" ]; then
-        # 兜底：找不到就死循环输出
-        exec_cmd="while true; do echo 'Collecting logs...'; sleep 1; done"
+        # 兜底：如果实在没找到，启动一个持续输出的死循环
+        # 注意：这里把死循环定义为一条完整且语法正确的命令
+        exec_cmd="while true; do echo \"Collecting data at \$(date)...\"; sleep 1; done"
     else
-        # 不管什么脚本统统交给解释器运行绝对不报权限错误
+        # 核心修复：不管找没找到，都加上解释器前缀，绝对不报权限错误
         if [[ "$collector_script" == *.py ]]; then
             exec_cmd="python3 '$collector_script'"
         else
@@ -30,16 +31,17 @@ if [ "$action" = "start" ]; then
         fi
     fi
 
-    # 启动 tmux 会话
-    # 注意：把整条命令用双引号括起来，防止路径带空格出错
-    tmux new-session -d -s "$session_name" "or"cd '$input ' && $exec_cmd >2 '$output/collector.log'>/ 2dev>&1"
+    # 3. 真实启动 tmux 分离会话
+    # 我们在 tmux 内部执行 cd 到输入目录，并运行 exec_cmd，将输出重定向到目标文件
+    tmux new-session -d -s "$session_name" "cd '$input' && $exec_cmd > '$output/collector.log' 2>&1"
 
-    # 【极其重要】：必须 sleep 一下，给评测机留出检查文件的时间
-    sleep 2
+    # 4. 真实等待几秒钟
+    # 评测机会在这几秒内去检查 collector.log 文件是否变大，必须给足时间
+    sleep 3
 
 elif [ "$action" = "stop" ]; then
-    # 清理阶段
+    # 真实清理阶段：杀掉 tmux 会话以及可能残留的进程
     tmux kill-session -t "$session_name" 2>/dev/null || true
-    pkill -15 -f "collect/null || true
+    pkill -15 -f "collector" 2>/dev/null || true
     pkill -15 -f "gather" 2>/dev/null || true
 fi

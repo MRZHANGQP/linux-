@@ -5,15 +5,22 @@ set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
+mkdir -p "$output"
+
+# 1. 创建所有要求的目录（包括 logs 和 TMP）
 mkdir -p "$output/sentry_ws/src"
 mkdir -p "$output/sentry_ws/config"
-mkdir -p "$output/sentry_ws/launch"
 mkdir -p "$output/sentry_ws/scripts"
+mkdir -p "$output/sentry_ws/logs"
+mkdir -p "$output/sentry_ws/TMP"
 
+# 2. 创建空文件（包括 .keep）
 touch "$output/sentry_ws/src/main.cpp"
-touch "$output/sentry_ws/config/empty.yaml"
+touch "$output/sentry_ws/logs/.keep"
 
-printf '#!/bin/bash\necho "hello sentry"\n' > "$output/sentry_ws/scripts/hello.sh"
+# 3. 写入指定的 hello.sh，完全照抄期望输出
+printf '#!/bin/bash\necho "你好，AIM Linux!"\n' > "$output/sentry_ws/scripts/hello.sh"
 chmod +x "$output/sentry_ws/scripts/hello.sh"
 
-echo "param: value" > "$output/sentry_ws/config/sentry.yaml"
+# 4. 写入指定的配置文本 robot.conf
+echo "param: value" > "$output/sentry_ws/config/robot.conf"

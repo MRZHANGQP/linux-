@@ -5,6 +5,15 @@ set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
-# TODO：删除下方提示和 exit 77，再填写你的命令。
-printf '%s\n' 'Q2 尚未实现' >&2
-exit 77
+mkdir -p "$output/sentry_ws/src"
+mkdir -p "$output/sentry_ws/config"
+mkdir -p "$output/sentry_ws/launch"
+mkdir -p "$output/sentry_ws/scripts"
+
+touch "$output/sentry_ws/src/main.cpp"
+touch "$output/sentry_ws/config/empty.yaml"
+
+printf '#!/bin/bash\necho "hello sentry"\n' > "$output/sentry_ws/scripts/hello.sh"
+chmod +x "$output/sentry_ws/scripts/hello.sh"
+
+echo "param: value" > "$output/sentry_ws/config/sentry.yaml"

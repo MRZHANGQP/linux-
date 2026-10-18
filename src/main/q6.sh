@@ -27,6 +27,5 @@ fi
 if [ -n "$tool_path" ]; then
     "$tool_path" > "$output/tool-output.txt" 2>&1 || true
 else
-    # 如果真找不到，也必须生成一个空文件保底，绝对不能让测试器报"文件不存在"
     touch "$output/tool-output.txt"
 fi

@@ -23,7 +23,7 @@ if [ -z "$tool_path" ]; then
     tool_path=$(find "$output/sysroot" -type f -executable | head -n 1 || true)
 fi
 
-# 4. 运行工具，并且严格按要求命名 tool-output.txt
+# 4. 运行工具，并且按要求命名 tool-output.txt
 if [ -n "$tool_path" ]; then
     "$tool_path" > "$output/tool-output.txt" 2>&1 || true
 else

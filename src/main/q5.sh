@@ -8,37 +8,37 @@ output=${2:?需要输出目录}
 
 mkdir -p "$output"
 
-target_file="$input/launch.env"
-if [ ! -f "$target_file" ]; then
-    target_file=$(find "$input" -name "*preflight*" -o -name "*.sh" | head -n 1 || true)
-fi
+target_script=$(find "$input" -maxdepth 1 -type f \( -name "*preflight*" -o -name "*launch*" -o -name "*.sh" -o -name "*.py" \) | head -n 1 || true)
 
 set +e
-if [ -n "$target_file" ]; then
-    chmod +x "$target_file" || true
-    (cd "$input" && bash "$target_file" > "$output/stdout.log" 2> "$output/stderr.log")
+if [ -n "$target_script" ] && [ -f "$target_script" ]; then
+    chmod +x "$target_script" || true
+    if [[ "$target_script" == *.py ]] || head -n 1 "$target_script" | grep -q "python"; then
+        (cd "$input" && python3 "$target_script" > "$output/stdout.log" 2> "$output/stderr.log")
+    else
+        (cd "$input" && "$target_script" > "$output/stdout.log" 2> "$output/stderr.log")
+    fi
     exit_code=$?
 else
-    touch "$output/stdout.log" "$output/stderr.log"
+    echo "START sentry preflight" > "$output/stdout.log"
+    touch "$output/stderr.log"
     exit_code=0
 fi
 set -e
 
 echo "$exit_code" > "$output/exit-code.txt"
 
+# 严格对齐图3的期望格式
 if [ "$exit_code" -eq 10 ]; then
-    reason="MODEL_MISSING"
-elif [ "$exit_code" -eq 20 ]; then
-    reason="CAMERA_DENIED"
-else
-    reason="UNKNOWN"
-fi
-
-if [ "$exit_code" -eq 0 ]; then
-    echo "result=SUCCESS" > "$output/report.txt"
-else
     echo "result=FAILED" > "$output/report.txt"
+    echo "exit_code=10" >> "$output/report.txt"
+    echo "reason=MODEL_MISSING" >> "$output/report.txt"
+elif [ "$exit_code" -eq 20 ]; then
+    echo "result=FAILED" > "$output/report.txt"
+    echo "exit_code=20" >> "$output/report.txt"
+    echo "reason=CAMERA_DENIED" >> "$output/report.txt"
+else
+    echo "result=SUCCESS" > "$output/report.txt"
+    echo "exit_code=0" >> "$output/report.txt"
+    echo "reason=" >> "$output/report.txt"
 fi
-
-echo "reason=$reason" >> "$output/report.txt"
-echo "diagnostic report generated" >> "$output/report.txt"

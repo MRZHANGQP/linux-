@@ -9,35 +9,35 @@ output=${2:?需要输出目录}
 mkdir -p "$output"
 mkdir -p "$output/received"
 
-env_file=$(find "$input" -name "remote.env" -type f | head -n 1 || true)
-
-if [ -n "$env_file" ]; then
+# 动态加载 env
+if [ -f "$input/remote.env" ]; then
     set +u
-    source "$env_file"
+    source "$input/remote.env"
     set -u
 fi
 
 set +u
-HOST=${HOST:-127.0.0.1}
-USER=${USER:-root}
-PORT=${PORT:-22}
-if [ -z "${KEY:-}" ]; then
+HOST=${HOST:-${REMOTE_HOST:-127.0.0.1}}
+USER=${USER:-${REMOTE_USER:-root}}
+PORT=${PORT:-${REMOTE_PORT:-22}}
+KEY=${KEY:-${REMOTE_KEY:-}}
+
+if [ -z "$KEY" ]; then
     KEY=$(find "$input" -type f -name "id_*" ! -name "*.pub" | head -n 1 || true)
     KEY=${KEY:-"~/.ssh/id_rsa"}
 fi
 set -u
 
+# 严格遵守题意，去掉 StrictHostKeyChecking
 cat > "$output/ssh_config" << EOF
 Host myremote
     HostName $HOST
     User $USER
     Port $PORT
     IdentityFile $KEY
-    StrictHostKeyChecking no
+    IdentitiesOnly yes
 EOF
-
 chmod 600 "$output/ssh_config"
 
-ssh -F "$output/ssh_config" myremote "whoami" > "$output/remote-user.txt" || true
-scp -F "$output/ssh_config" myremote:/var/log/app.log "$output/received/errors.log" || true
-scp -F "$output/ssh_config" myremote:/*.log "$output/received/" 2>/dev/null || true
+ssh -F "$output/ssh_config" myremote "whoami" > "$output/remote-user.txt" 2>/dev/null || true
+scp -F "$output/ssh_config" myremote:/var/log/app.log "$output/received/errors.log" 2>/dev/null || true

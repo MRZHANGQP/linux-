@@ -8,11 +8,11 @@ output=${2:?需要输出目录}
 action=${3:-start}
 
 mkdir -p "$output"
-session_name="debug_session"
+session_name="sentry_session"
 
 if [ "$action" = "start" ]; then
     tmux kill-session -t "$session_name" 2>/dev/null || true
-    tmux new-session -d -s "$session_name" "while true; do echo 'Collecting data...'; sleep 1; done > '$output/collector.log' 2>&1"
+    tmux new-session -d -s "$session_name" "while true; do echo 'data' >> '$output/collector.log'; sleep 1; done"
 elif [ "$action" = "stop" ]; then
     tmux kill-session -t "$session_name" 2>/dev/null || true
 fi

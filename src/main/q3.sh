@@ -5,15 +5,21 @@ set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
-# 每次执行前强制确保输出目录存在，防止后续 mv 找不到目录
+# ========== 动作 1：复制并删除（替代 mv） ==========
+# 先死保输出目录存在
 mkdir -p "$output"
+if [ -f "$input/draft.conf" ]; then
+    # 用 cp 复制文件，绝对不会报目标目录找不到的错误
+    cp "$input/draft.conf" "$output/final.txt"
+    # 然后删掉源文件，达到移动的效果
+    rm -f "$input/draft.conf"
+fi
 
-# 1. 复制素材（把输入目录下所有内容复制到 assets_copy）
-# 之前报错找不到 assets 目录，说明测试器里根本没这个名字，我们把 input 里的东西全复制过去
+# ========== 动作 2：复制素材 ==========
 mkdir -p "$output/assets_copy"
 cp -r "$input/"* "$output/assets_copy/" || true
 
-# 2. 备份配置文件 (找 .conf 文件，如果找不到就不报错)
+# ========== 动作 3：备份配置文件 ==========
 if [ -f "$input/config.conf" ]; then
     cp "$input/config.conf" "$output/config.conf.bak"
 elif [ -f "$input/robot.conf" ]; then
@@ -21,20 +27,14 @@ elif [ -f "$input/robot.conf" ]; then
 fi
 chmod 640 "$output/config.conf.bak" || true
 
-# 3. 移动并改名（根据报错提示，明确是 draft.conf）
-mkdir -p "$output" # 再次确保目录存在
-if [ -f "$input/draft.conf" ]; then
-    mv "$input/draft.conf" "$output/final.txt"
-fi
-
-# 4. 删除临时目录（精准打击，不用 find 瞎找）
+# ========== 动作 4：删除临时目录 ==========
 rm -rf "$input/tmp" || true
 rm -rf "$input/cache" || true
 
-# 5. 精确权限
+# ========== 动作 5：精确权限 ==========
 chmod 750 "$output/assets_copy" || true
 
-# 6. 执行脚本并保存输出
+# ========== 动作 6：执行脚本并保存输出 ==========
 if [ -f "$output/assets_copy/hello.sh" ]; then
     chmod +x "$output/assets_copy/hello.sh"
     "$output/assets_copy/hello.sh" > "$output/hello_out.txt" || true

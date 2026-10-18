@@ -23,10 +23,8 @@ touch "$output/sentry_ws/tmp/scratch.txt"
 printf '#!/bin/bash\necho "Hello, AIM Linux!"\n' > "$output/sentry_ws/scripts/hello.sh"
 chmod +x "$output/sentry_ws/scripts/hello.sh"
 
-# 4. 写入配置文本（第一行必须对，剩下的我瞎猜了两行凑齐3行42字符）
-# ⚠️ 注意：请打开你的 Problem.pdf，找到 Q2 的要求，看看那 3 行到底写的是什么！
 cat > "$output/sentry_ws/config/robot.conf" << EOF
 robot=sentry
-mode=active
-version=1.0
+mode=training
+version=1.0.0
 EOF

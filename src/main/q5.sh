@@ -5,6 +5,12 @@ set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
-# TODO：删除下方提示和 exit 77，再填写你的命令。
-printf '%s\n' 'Q5 尚未实现' >&2
-exit 77
+mkdir -p "$output"
+set +e
+bash "$input/launch.env" > "$output/stdout.txt" 2> "$output/stderr.txt"
+exit_code=$?
+set -e
+
+echo "Exit Code: $exit_code" > "$output/diagnosis.txt"
+echo "STDOUT saved to stdout.txt" >> "$output/diagnosis.txt"
+echo "STDERR saved to stderr.txt" >> "$output/diagnosis.txt"

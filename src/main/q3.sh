@@ -5,6 +5,13 @@ set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
-# TODO：删除下方提示和 exit 77，再填写你的命令。
-printf '%s\n' 'Q3 尚未实现' >&2
-exit 77
+mkdir -p "$output"
+cp -r "$input/assets" "$output/assets_copy"
+cp "$input/config.conf" "$output/config.conf.bak"
+mv "$input/draft.txt" "$output/final.txt"
+rm -rf "$input/tmp"
+
+chmod 750 "$output/assets_copy"
+chmod 640 "$output/config.conf.bak"
+chmod +x "$output/assets_copy/hello.sh"
+"$output/assets_copy/hello.sh" > "$output/hello_out.txt"

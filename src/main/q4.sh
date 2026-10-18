@@ -5,6 +5,9 @@ set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
-# TODO：删除下方提示和 exit 77，再填写你的命令。
-printf '%s\n' 'Q4 尚未实现' >&2
-exit 77
+mkdir -p "$output"
+cat "$input/boot.log" "$input/run.log" > "$output/merged.log"
+grep -E "^(ERROR|WARN)" "$output/merged.log" > "$output/filtered.log" || true
+head -n 5 "$output/filtered.log" > "$output/head.txt"
+tail -n 5 "$output/filtered.log" > "$output/tail.txt"
+grep -c "^ERROR" "$output/merged.log" > "$output/error_count.txt" || true

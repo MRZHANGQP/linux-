@@ -4,9 +4,15 @@
 set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
-
 action=${3:-repair}
 
-# TODO：删除下方提示和 exit 77，再填写你的命令。
-printf '%s\n' 'Q8 尚未实现' >&2
-exit 77
+mkdir -p "$output"
+if [ "$action" = "repair" ]; then
+    pid=$(pgrep -f "collector" || true)
+    if [ -n "$pid" ]; then kill -15 "$pid"; fi
+    systemctl --user restart httpd
+    curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 > "$output/curl_status.txt"
+elif [ "$action" = "cleanup" ]; then
+    systemctl --user stop httpd
+    pkill -f "collector" || true
+fi

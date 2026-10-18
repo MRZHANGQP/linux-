@@ -5,6 +5,18 @@ set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
 
-# TODO：删除下方提示和 exit 77，再填写你的命令。
-printf '%s\n' 'Q7 尚未实现' >&2
-exit 77
+mkdir -p "$output"
+source "$input/remote.env"
+
+cat > "$output/ssh_config" << EOF
+Host myremote
+    HostName $HOST
+    User $USER
+    Port $PORT
+    IdentityFile $KEY
+    StrictHostKeyChecking no
+EOF
+
+chmod 600 "$output/ssh_config"
+ssh -F "$output/ssh_config" myremote "whoami" > "$output/whoami.txt"
+scp -F "$output/ssh_config" myremote:/var/log/app.log "$output/remote_app.log"

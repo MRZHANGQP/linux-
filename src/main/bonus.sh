@@ -4,9 +4,13 @@
 set -eu
 input=${1:?需要输入目录}
 output=${2:?需要输出目录}
-
 action=${3:-start}
 
-# TODO：删除下方提示和 exit 77，再填写你的命令。
-printf '%s\n' 'BONUS 尚未实现' >&2
-exit 77
+mkdir -p "$output"
+
+if [ "$action" = "start" ]; then
+    tmux kill-session -t debug_session 2>/dev/null || true
+    tmux new-session -d -s debug_session "bash $input/collector.sh > $output/collector.log 2>&1"
+elif [ "$action" = "stop" ]; then
+    tmux kill-session -t debug_session 2>/dev/null || true
+fi

@@ -2,15 +2,19 @@
 # Q8：repair 时识别并停止采集器、修复 HTTP 服务；cleanup 时停止修复后的服务。
 # 完整接口与验收规格见 Problem.pdf。只修改本文件，不修改测试或工具。
 #!/bin/bash
-# Q8 昨天还能运行 —— repair / cleanup
+# Q8 昨天还能运行  (src/main/q8.sh)
 #   bash src/main/q8.sh INPUT_DIRECTORY OUTPUT_DIRECTORY [repair|cleanup]
 #
-# 按反馈（wrong-port / wrong-route 两个场景）反推的行为：
-#   1. 先把采集器日志原样存到 $OUTPUT（评分要求“至少两条目标采集器日志”）；
-#   2. 从日志/其它文本里读出“正确”的 port 与 route，写回 $OUTPUT/server.conf；
-#   3. 按 PID（pidfile、端口反查）优雅停止采集器和原来的错误服务；
-#   4. 在正确端口上把服务拉起来，老师 curl 那个 route 要拿到 200；
-#   5. cleanup 只负责停掉 repair 起的服务，并确认端口已释放。
+# 评测会做这些事：
+#   1. 进程识别：OUTPUT/process.txt 里 pid/user/state/command 四项要能对上采集器；
+#   2. 正常停止：SIGTERM 掉 TARGET_PID，日志里要出现 "STOP <token>"；
+#   3. 保留其他进程：另一个同款采集器（干扰项）不能被误杀；
+#   4. 采集日志：OUTPUT/collector-sample.log 里至少两条 "TICK <token> "；
+#   5. 修复配置：OUTPUT/server.conf 必须恰好是 bind=127.0.0.1 / port=<TARGET_PORT> / route=/status，
+#      且原来的错误服务（SERVICE_PID）要停掉；
+#   6. HTTP 恢复：服务要在 TARGET_PORT 上对 /status 返回 200 和 "SENTRY READY\n"，
+#      并把状态码、响应体写进 http-status.txt / http-body.txt；
+#   7. 服务清理：cleanup 之后端口不能再被监听。
 set -eu
 
 input=${1:?需要输入目录}
@@ -18,197 +22,118 @@ output=${2:?需要输出目录}
 action=${3:-repair}
 
 mkdir -p "$output"
-q8log="$output/q8.log"
-: >"$q8log"
-say() { printf '[q8] %s\n' "$*" >>"$q8log"; }
 
-# ---------- 小工具 ----------
-# 谁在监听这个端口（不需要 root，只看本用户自己的进程）
-pid_on_port() {
-    port=$1
-    [ -n "$port" ] || return 1
-    if command -v ss >/dev/null 2>&1; then
-        ss -ltnpH "sport = :$port" 2>/dev/null \
-            | grep -oE 'pid=[0-9]+' | head -n 1 | cut -d= -f2
-    elif command -v lsof >/dev/null 2>&1; then
-        lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1
-    elif command -v fuser >/dev/null 2>&1; then
-        fuser -n tcp "$port" 2>/dev/null | sed 's/^[^:]*://' \
-            | tr -s ' ' '\n' | grep -E '^[0-9]+$' | head -n 1
-    fi
+# 端口是否有监听（bash 自带 /dev/tcp，不依赖 ss/lsof）
+port_open() {
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
 }
 
-# 先 TERM（正常停止），等不到再 KILL
-stop_pid() {
-    pid=$1
-    [ -n "$pid" ] || return 1
-    kill -0 "$pid" 2>/dev/null || return 0
-    kill -TERM "$pid" 2>/dev/null || true
+# 等进程消失
+wait_gone() {
     i=0
-    while [ "$i" -lt 30 ]; do
-        kill -0 "$pid" 2>/dev/null || return 0
-        sleep 0.1
+    while [ "$i" -lt "$2" ]; do
+        kill -0 "$1" 2>/dev/null || return 0
+        sleep 0.05
         i=$((i + 1))
     done
-    kill -KILL "$pid" 2>/dev/null || true
-    sleep 0.3
-    if kill -0 "$pid" 2>/dev/null; then return 1; fi
-    return 0
+    return 1
 }
 
-correct_port=''
-correct_route=''
-http_code=''
-srv_pid=''
-log_count=0
+# 等端口释放
+wait_port_free() {
+    i=0
+    while [ "$i" -lt "${2:-60}" ]; do
+        port_open "$1" || return 0
+        sleep 0.05
+        i=$((i + 1))
+    done
+    return 1
+}
 
-# ---------- repair ----------
 if [ "$action" = 'repair' ]; then
+    set +u
+    # shellcheck disable=SC1091
+    . "$input/process.env"
+    set -u
 
-    # 1) 采集器日志：原样保存，文件名不变
-    while IFS= read -r f; do
-        [ -f "$f" ] || continue
-        [ -s "$f" ] || continue
-        name=$(basename "$f")
-        case $name in
-            q8.log|http.log) continue ;;
-        esac
-        if cp -f "$f" "$output/$name" 2>/dev/null; then
-            log_count=$((log_count + 1))
-        fi
-        if [ "$log_count" -ge 10 ]; then break; fi
-    done < <(find "$input" -type f -name '*.log' -size -5M 2>/dev/null | sort)
-    say "已保存采集器日志: $log_count 份"
+    : "${TARGET_PID:?process.env 缺少 TARGET_PID}"
+    : "${TARGET_TOKEN:?process.env 缺少 TARGET_TOKEN}"
+    : "${WORKER_LOG:?process.env 缺少 WORKER_LOG}"
+    : "${SERVICE_PID:?process.env 缺少 SERVICE_PID}"
+    : "${TARGET_PORT:?process.env 缺少 TARGET_PORT}"
+    : "${START_TOOL:?process.env 缺少 START_TOOL}"
 
-    # 2) 读当前（错误的）配置
-    src_conf="$input/server.conf"
-    if [ ! -f "$src_conf" ]; then
-        src_conf=$(find "$input" -maxdepth 3 -type f -name 'server.conf' 2>/dev/null | head -n 1 || true)
-    fi
-    if [ -z "$src_conf" ] || [ ! -f "$src_conf" ]; then
-        say "找不到 server.conf"
-        exit 1
-    fi
-    cur_port=$(sed -n 's/^port=//p' "$src_conf" | head -n 1)
-    cur_route=$(sed -n 's/^route=//p' "$src_conf" | head -n 1)
-    say "当前配置: port=$cur_port route=$cur_route"
+    # 1) 进程识别：趁进程还活着取 user/state/command
+    {
+        printf 'pid=%s\n' "$TARGET_PID"
+        printf 'user=%s\n' "$(ps -ww -o user= -p "$TARGET_PID" | tr -d '[:space:]')"
+        printf 'state=%s\n' "$(ps -ww -o state= -p "$TARGET_PID" | tr -d '[:space:]')"
+        printf 'command=%s\n' "$(ps -ww -o args= -p "$TARGET_PID" | sed 's/^[[:space:]]*//')"
+    } >"$output/process.txt"
 
-    # 3) 从日志/其它文件里找“正确”的 port 与 route
-    #    （采集器日志里记录的是昨天还能跑时的真实端口与路由）
-    ports=$(grep -rhoE '(port[=: ]+|127\.0\.0\.1:)[0-9]{4,5}' "$input" \
-                --exclude=server.conf --exclude-dir=.git --exclude='*.pdf' 2>/dev/null \
-            | grep -oE '[0-9]{4,5}' | sort -u || true)
-    for p in $ports; do
-        if [ "$p" != "$cur_port" ]; then correct_port=$p; break; fi
+    # 2) 正常停止采集器：SIGTERM，worker 收到后会补一行 STOP <token>
+    kill -TERM "$TARGET_PID" 2>/dev/null || true
+    wait_gone "$TARGET_PID" 60 || true
+
+    # 3) 保存采集器日志（等 STOP 落盘后再复制）
+    i=0
+    while [ "$i" -lt 40 ]; do
+        if grep -q "^STOP ${TARGET_TOKEN}$" "$WORKER_LOG" 2>/dev/null; then break; fi
+        sleep 0.05
+        i=$((i + 1))
     done
-    [ -n "$correct_port" ] || correct_port=$cur_port
+    cp -f "$WORKER_LOG" "$output/collector-sample.log"
 
-    routes=$(grep -rhoE 'route[=: ]+/[A-Za-z0-9/_.-]+' "$input" \
-                --exclude=server.conf --exclude-dir=.git --exclude='*.pdf' 2>/dev/null \
-            | sed -E 's/^route[=: ]+//' | sort -u || true)
-    for r in $routes; do
-        if [ "$r" != "$cur_route" ]; then correct_route=$r; break; fi
+    # 4) 停掉原来的错误服务，等端口真正释放
+    kill -TERM "$SERVICE_PID" 2>/dev/null || true
+    wait_gone "$SERVICE_PID" 60 || true
+    wait_port_free "$TARGET_PORT" 60 || true
+
+    # 5) 修复配置：三项固定内容
+    printf 'bind=127.0.0.1\nport=%s\nroute=/status\n' "$TARGET_PORT" >"$output/server.conf"
+
+    # 6) 用教师提供的脚本启动服务（pid 写到 OUTPUT/service/pid）
+    bash "$START_TOOL" "$output/server.conf" "$output/service"
+
+    # 7) 等就绪并记录 HTTP 结果
+    code=''
+    i=0
+    while [ "$i" -lt 100 ]; do
+        code=$(curl -s -o "$output/http-body.txt" -w '%{http_code}' \
+            "http://127.0.0.1:${TARGET_PORT}/status" 2>/dev/null || true)
+        if [ "$code" = '200' ]; then break; fi
+        sleep 0.05
+        i=$((i + 1))
     done
-    [ -n "$correct_route" ] || correct_route=$cur_route
-    case $correct_route in
-        /*) ;;
-        *) correct_route="/$correct_route" ;;
-    esac
-    say "修正为: port=$correct_port route=$correct_route"
+    printf '%s\n' "$code" >"$output/http-status.txt"
 
-    # 4) 写 $OUTPUT/server.conf（保持原来的行序与格式，只换值）
-    cp -f "$src_conf" "$output/server.conf"
-    sed -i "s|^port=.*|port=${correct_port}|" "$output/server.conf"
-    sed -i "s|^route=.*|route=${correct_route}|" "$output/server.conf"
+elif [ "$action" = 'cleanup' ]; then
+    # 停掉 repair 启动的服务
+    pid=''
+    if [ -f "$output/service/pid" ]; then
+        pid=$(tr -dc '0-9' <"$output/service/pid")
+    fi
+    if [ -n "$pid" ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        wait_gone "$pid" 60 || true
+    fi
 
-    # 5) 停采集器：优先 pidfile，其次按进程名兜底
-    stopped_collector=0
-    for pf in "$input"/*.pid; do
-        [ -f "$pf" ] || continue
-        p=$(tr -dc '0-9' <"$pf" | head -c 7 || true)
-        [ -n "$p" ] || continue
-        if kill -0 "$p" 2>/dev/null; then
-            if stop_pid "$p"; then
-                say "已停止 pid=$p（来源 $pf）"
-                stopped_collector=1
+    # 确认端口已释放；还有残留就按端口再清一次
+    port=''
+    if [ -f "$output/server.conf" ]; then
+        port=$(sed -n 's/^port=//p' "$output/server.conf" | head -n 1)
+    fi
+    if [ -n "$port" ]; then
+        wait_port_free "$port" 60 || true
+        if port_open "$port"; then
+            p2=$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -n 1 | cut -d= -f2 || true)
+            if [ -n "$p2" ]; then
+                kill -TERM "$p2" 2>/dev/null || true
+                wait_gone "$p2" 40 || true
+                wait_port_free "$port" 40 || true
             fi
         fi
-    done
-    if [ "$stopped_collector" -eq 0 ] && command -v pgrep >/dev/null 2>&1; then
-        for p in $(pgrep -u "$(id -u)" -f 'collector' 2>/dev/null || true); do
-            if stop_pid "$p"; then say "已停止采集器 pid=$p"; fi
-        done
     fi
-
-    # 6) 停掉旧 HTTP 服务（它监听在当前的错误端口上）
-    old_pid=$(pid_on_port "$cur_port" || true)
-    if [ -n "$old_pid" ]; then
-        if stop_pid "$old_pid"; then say "已停止旧 HTTP 服务 pid=$old_pid (port $cur_port)"; fi
-    fi
-    # 端口若被别的残留进程占着，再清一次
-    old_pid=$(pid_on_port "$correct_port" || true)
-    if [ -n "$old_pid" ]; then
-        if stop_pid "$old_pid"; then say "已停止占用 $correct_port 的进程 pid=$old_pid"; fi
-    fi
-
-    # 7) 在正确端口上拉起服务，route 用静态文件兜住（老师只看状态码）
-    root="$output/.www"
-    mkdir -p "$root$correct_route"
-    printf 'ok\n' >"$root$correct_route/index.html"
-
-    PY=python3
-    if ! command -v python3 >/dev/null 2>&1; then PY=python; fi
-    nohup "$PY" -m http.server "$correct_port" --bind 127.0.0.1 --directory "$root" \
-        >"$output/http.log" 2>&1 &
-    srv_pid=$!
-    printf '%s\n' "$srv_pid" >"$output/server.pid"
-
-    # 8) 等它真的能返回 200
-    i=0
-    while [ "$i" -lt 25 ]; do
-        http_code=$(curl -s -o /dev/null -w '%{http_code}' \
-            "http://127.0.0.1:${correct_port}${correct_route}" 2>/dev/null || true)
-        if [ "$http_code" = '200' ]; then break; fi
-        sleep 0.2
-        i=$((i + 1))
-    done
-    printf '%s\n' "${http_code:-}" >"$output/curl_status.txt"
-    say "自检 http_code=${http_code:-none}"
-
-# ---------- cleanup ----------
-elif [ "$action" = 'cleanup' ]; then
-    if [ -f "$output/server.pid" ]; then
-        p=$(tr -dc '0-9' <"$output/server.pid" | head -c 7 || true)
-        if [ -n "$p" ]; then
-            if stop_pid "$p"; then say "cleanup: 已停止 pid=$p"; fi
-        fi
-    fi
-    # 兜底：配置里的端口上还有监听就继续清
-    if [ -f "$output/server.conf" ]; then
-        p2=$(sed -n 's/^port=//p' "$output/server.conf" | head -n 1)
-        if [ -n "$p2" ]; then
-            for n in 1 2 3; do
-                left=$(pid_on_port "$p2" || true)
-                if [ -z "$left" ]; then break; fi
-                stop_pid "$left" || true
-                sleep 0.2
-            done
-        fi
-    fi
-    say "cleanup 完成"
-else
-    printf '未知 action: %s（只支持 repair / cleanup）\n' "$action" >&2
-    exit 2
 fi
-
-# ---------- 摘要 ----------
-{
-    printf 'action=%s\n' "$action"
-    printf 'port=%s\n' "$correct_port"
-    printf 'route=%s\n' "$correct_route"
-    printf 'http_code=%s\n' "$http_code"
-    printf 'logs=%s\n' "$log_count"
-    printf 'service_pid=%s\n' "$srv_pid"
-} >"$output/status.txt"
 
 exit 0
